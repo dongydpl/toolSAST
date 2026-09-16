@@ -7,7 +7,7 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 # TODO: Thay thế bằng API Key thật của bạn
-GEMINI_API_KEY = "AQ.Ab8RN6LtAXmKMehqEOtwScle0eksM-8sKdovDjXeE_Kl5NZi8Q"
+GEMINI_API_KEY = "123123123"
 
 def review(prompt: str) -> dict:
     if GEMINI_API_KEY == "YOUR_API_KEY_HERE":
