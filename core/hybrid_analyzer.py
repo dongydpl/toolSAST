@@ -243,53 +243,65 @@ class HybridAnalyzer:
                     else:
                         if var_name in traces: del traces[var_name]
 
-        elif cfg_node.type == "sink":
-            self.paths_found += 1
-            
-            sink_line = cfg_node.ast_node.start_point[0] + 1
-            vuln_type = self.semgrep_data.get("sink_types", {}).get(sink_line, "unknown")
-            
-            # Quăng toàn bộ khối lệnh Sink vào máy xay, không cần quan tâm cấu trúc
-            vars_in_sink = self.extract_all_variables(cfg_node.ast_node)
-            
-            final_status = "SAFE"
-            infected_vars = []
-            
-            for v in vars_in_sink:
-                if state.get(v) == "TAINTED":
-                    final_status = "TAINTED"
-                    infected_vars.append(v)
-            
-            # [REPORT_TRACE_CHANGE]
-            taint_trace = []
-            if infected_vars:
-                first_infected = infected_vars[0]
-                taint_trace = list(traces.get(first_infected, []))
-                taint_trace.append({
-                    "role": "sink",
-                    "file": self.current_file,
-                    "line": sink_line,
-                    "code": cfg_node.code_text,
-                    "var": first_infected
-                })
+        # --- [TÍCH HỢP SEMGREP]: Đánh giá Sink cho mọi node ---
+        if cfg_node.ast_node:
+            current_line = cfg_node.ast_node.start_point[0] + 1
+            if current_line in self.semgrep_data.get("sinks", []):
+                self.paths_found += 1
+                
+                sink_line = current_line
+                vuln_type = self.semgrep_data.get("sink_types", {}).get(sink_line, "unknown")
+                
+                # Quăng toàn bộ khối lệnh Sink vào máy xay, không cần quan tâm cấu trúc
+                vars_in_sink = self.extract_all_variables(cfg_node.ast_node)
+                
+                final_status = "SAFE"
+                infected_vars = []
+                
+                for v in vars_in_sink:
+                    if state.get(v) == "TAINTED":
+                        final_status = "TAINTED"
+                        infected_vars.append(v)
+                
+                # [REPORT_TRACE_CHANGE]
+                taint_trace = []
+                if infected_vars:
+                    first_infected = infected_vars[0]
+                    taint_trace = list(traces.get(first_infected, []))
+                    taint_trace.append({
+                        "role": "sink",
+                        "file": self.current_file,
+                        "line": sink_line,
+                        "code": cfg_node.code_text,
+                        "var": first_infected
+                    })
 
-            finding = {
-                "id": self.paths_found,
-                "status": final_status,
-                "severity": "HIGH" if final_status == "TAINTED" else "INFO",
-                "vuln_type": vuln_type,
-                "sink_code": cfg_node.code_text,
-                "tainted_variables": infected_vars,
-                "path": path,
-                "full_path": path, # [REPORT_TRACE_CHANGE]
-                "taint_trace": taint_trace, # [REPORT_TRACE_CHANGE]
-                "sink_line": sink_line, # [REPORT_TRACE_CHANGE]
-                "sink_file": self.current_file, # [REPORT_TRACE_CHANGE]
-                "message": f"Found {'tainted' if final_status == 'TAINTED' else 'safe'} sink at path {self.paths_found}"
-            }
-            self.findings.append(finding) 
+                finding = {
+                    "id": self.paths_found,
+                    "status": final_status,
+                    "severity": "HIGH" if final_status == "TAINTED" else "INFO",
+                    "vuln_type": vuln_type,
+                    "sink_code": cfg_node.code_text,
+                    "tainted_variables": infected_vars,
+                    "path": path,
+                    "full_path": path, # [REPORT_TRACE_CHANGE]
+                    "taint_trace": taint_trace, # [REPORT_TRACE_CHANGE]
+                    "sink_line": sink_line, # [REPORT_TRACE_CHANGE]
+                    "sink_file": self.current_file, # [REPORT_TRACE_CHANGE]
+                    "message": f"Found {'tainted' if final_status == 'TAINTED' else 'safe'} sink at path {self.paths_found}"
+                }
+                
+                # Tránh duplicate finding cho cùng 1 dòng sink trên cùng path (nếu có nhiều node trên 1 dòng)
+                is_duplicate = False
+                for existing in self.findings:
+                    if existing["sink_line"] == sink_line and existing["path"] == path:
+                        is_duplicate = True
+                        break
+                        
+                if not is_duplicate:
+                    self.findings.append(finding)
 
-        elif cfg_node.type in ["normal", "if_cond", "while_cond"]:  # [CROSS_FUNC_CHANGE]
+        if cfg_node.type in ["normal", "if_cond", "while_cond"]:  # [CROSS_FUNC_CHANGE]
             calls = self.find_function_calls(cfg_node.ast_node)
             for call_node in calls:
                 func_name_node = call_node.child_by_field_name('function')
@@ -300,7 +312,11 @@ class HybridAnalyzer:
                 if summary and args_node:
                     args_list = [] # Lấy danh sách tham số thực tế từ AST
                     for arg in args_node.named_children:
-                        args_list.append(self.extract_text(arg))
+                        vars_in_arg = self.extract_all_variables(arg)
+                        if vars_in_arg:
+                            args_list.append(vars_in_arg[0])
+                        else:
+                            args_list.append("unknown")
                         
                     for sink_dep in summary.get("sink_depends_on_params", []):
                         p_idx = sink_dep["param_index"]
